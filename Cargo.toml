@@ -1,0 +1,29 @@
+[package]
+name = "cubo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4.4", features = ["derive", "env"]}
+tracing-subscriber = { version = "0.3", features = ["env-filter"]}
+tempfile = "3"
+tracing="0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+chrono = { version = "0.4.41", features = ["serde"] }
+toml = "0.9.8"
+chrono-humanize = "0.2.1"
+thiserror = "2"
+uuid = { version = "1.18.1", features = ["v4"] }
+nix = { version = "0.30.1", features = ["process", "mount", "sched", "user", "signal", "fs", "hostname"] }
+libc = "0.2"
+oci-distribution = { version = "0.11", default-features = false, features = ["rustls-tls"]}
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+sha2 = "0.10"
+flate2 = "1.0"
+tar = "0.4"
+
+[dev-dependencies]
+serial_test = "3.2.0"

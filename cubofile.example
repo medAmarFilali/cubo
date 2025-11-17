@@ -1,0 +1,28 @@
+# Example Cubofile - custom build format for cubo
+# This is similar to Dockerfile but specific to cubo
+
+# BASE: Specify the base image to start from
+# You must import this image first using: cubo image import alpine:latest alpine.tar
+BASE alpine:latest
+
+# RUN: Execute commands in the container during build
+RUN apk add --no-cache curl
+RUN apk add --no-cache git
+
+# COPY: Copy files from build context to container
+# Format: COPY <source> <destination>
+COPY ./myapp /usr/local/bin/myapp
+COPY ./config.toml /etc/myapp/config.toml
+
+# ENV: Set environment variables
+# Format: ENV KEY=value
+ENV PATH=/usr/local/bin:/usr/bin:/bin
+ENV APP_ENV=production
+ENV LOG_LEVEL=info
+
+# WORKDIR: Set the working directory
+WORKDIR /app
+
+# CMD: Default command to run when container starts
+# Format: CMD <command> [args...]
+CMD /usr/local/bin/myapp serve

@@ -1,0 +1,40 @@
+# Rust build artifacts
+/target/
+debug/
+*.pdb
+**/*.rs.bk
+**/mutants.out*/
+
+# Cargo
+Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CI/CD
+.github/
+
+# Example/test configuration files
+Cubofile
+Cubofile.toml
+Cubofile.simple.toml
+# Keep cubofile.example as a reference
+
+# OS files
+.DS_Store
+Thumbs.db
+*.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Test artifacts
+test-*/
+**/test-doksfile*/
