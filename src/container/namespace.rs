@@ -22,11 +22,15 @@ pub struct UnshareInfo {
 /// Unshare into a new user namespace, then map container root (0) to current host uid/gid.
 /// Writes /proc/self/setgroups (deny) before gid_map as required by the kernel.
 pub fn unshare_user_then_map_ids() -> Result<()> {
-    unshare(CloneFlags::CLONE_NEWUSER)
-        .map_err(|e| CuboError::NamespaceError(format!("Failed to clone user: {}", e)))?;
-
     let uid = geteuid().as_raw();
     let gid = getegid().as_raw();
+
+    if uid == 0 {
+        tracing::debug!("Running as root (uid=0), skipping user namespace creation");
+        return Ok(());
+    }
+    unshare(CloneFlags::CLONE_NEWUSER)
+        .map_err(|e| CuboError::NamespaceError(format!("Failed to clone user: {}", e)))?;
 
     match fs::write("/proc/self/setgroups", b"deny") {
         Ok(_) => {}

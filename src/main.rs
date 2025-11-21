@@ -19,9 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("Cubo containerization tool");
-    println!("Command: {:?}", cli.command);
-    println!("Cubo CLI - Root dir: {:?}", std::env::var("CUBO_ROOT").unwrap_or_else(|_| "Not set".to_string()));
-
+    
     match cli.command {
         cli::Commands::Run(args) => commands::run::execute(args).await?,
         cli::Commands::Build(args) => commands::build::execute(args).await?,

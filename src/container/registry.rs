@@ -1,15 +1,11 @@
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
-use libc::LC_MONETARY_MASK;
 use oci_distribution::client::{Client, ClientConfig, ClientProtocol};
-use oci_distribution::secrets::RegistryAuth;
 use oci_distribution::Reference;
 use tracing::{info, debug};
 use serde::{Deserialize, Serialize};
-use reqwest;
 
 use crate::error::{CuboError, Result};
 use super::image_store::{ImageStore, ImageManifest, ImageConfig};
@@ -104,6 +100,8 @@ impl RegistryClient {
         info!("Registry: {}, Repository: {}, tag: {}", registry, repository, tag);
 
         let http_client = reqwest::Client::builder()
+            .user_agent("cubo/0.1.0")
+            .redirect(reqwest::redirect::Policy::limited(10))
             .build()
             .map_err(|e| CuboError::SystemError(format!("Failed to create http client: {}", e)))?;
         let token = Self::get_registry_token(&http_client, &registry, &repository).await?;
@@ -185,7 +183,7 @@ impl RegistryClient {
     async fn get_registry_token(client: &reqwest::Client, registry: &str, repository: &str) -> Result<String> {
         if registry == "registry-1.docker.io" {
             let url = format!(
-                "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:full",
+                "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
                 repository
             );
 
@@ -193,6 +191,13 @@ impl RegistryClient {
                 .send()
                 .await
                 .map_err(|e| CuboError::SystemError(format!("Failed to get auth token: {}", e)))?;
+
+            if !response.status().is_success() {
+                return Err(CuboError::SystemError(format!(
+                    "Failed to get auth token: HTTP {}",
+                    response.status()
+                )));
+            }
 
             #[derive(Deserialize)]
             struct TokenResponse {

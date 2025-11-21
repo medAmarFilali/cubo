@@ -1,6 +1,7 @@
 use crate::cli::RunArgs;
 use crate::container::runtime::{ContainerRuntime, RuntimeConfig};
 use crate::container::{Container, VolumeMount, PortMapping, Protocol};
+use crate::container::image_store::ImageStore;
 use crate::error::Result;
 use tracing::{info, warn, error};
 
@@ -8,12 +9,29 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     info!("Running container with blueprint: {}", args.blueprint);
 
     let config = RuntimeConfig::from_env();
-    let runtime = ContainerRuntime::new(config)?;
+    let runtime = ContainerRuntime::new(config.clone())?;
+
+    let image_store_path = config.root_dir.join("images");
+    let image_store = ImageStore::new(image_store_path)?;
 
     let command = if let Some(cmd) = args.command {
         cmd
     } else {
-        vec!["/bin/sh".to_string()]
+        match image_store.get_config(&args.blueprint) {
+            Ok(img_config) => {
+                if let Some(cmd) = img_config.cmd {
+                    info!("Using default CMD from image: {:?}", cmd);
+                    cmd
+                } else {
+                    warn!("No CMD in image config, defaulting to /bin/sh");
+                    vec!["/bin/sh".to_string()]
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load image config: {}, defaulting to /bin/sh", e);
+                vec!["/bin/sh".to_string()]
+            }
+        }
     };
 
     let mut container = Container::new(args.blueprint.clone(), command);

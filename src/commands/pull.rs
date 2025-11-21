@@ -33,7 +33,7 @@ pub async fn execute(args: PullArgs) -> Result<()> {
         Err(e) => {
             eprintln!("Pull failed: {}", e);
             eprintln!();
-            eprintln!("Commin issues: ");
+            eprintln!("Common issues: ");
             eprintln!("  - Check you internet connection");
             eprintln!("  - Verify the image name is correct");
             eprintln!("  - For private images, authentication is not yet supported");
