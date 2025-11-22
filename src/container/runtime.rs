@@ -229,15 +229,17 @@ impl ContainerRuntime {
 
     async fn create_isolated_process(&self, exec_ctx: &ExecutionContext) -> Result<i32> {
         let container = &exec_ctx.container;
-        
-        let program = CString::new(container.command[0].clone())
+
+        let program = CString::new("/bin/sh")
             .map_err(|e| CuboError::SystemError(format!("Invalid command: {}", e)))?;
-        
-        let args: Result<Vec<CString>> = container.command.iter()
-            .map(|arg| CString::new(arg.clone())
-                .map_err(|e| CuboError::SystemError(format!("Invalid argument: {}", e))))
-            .collect();
-        let args = args?;
+
+        let shell_command = container.command.join(" ");
+        let args = vec![
+            CString::new("/bin/sh").unwrap(),
+            CString::new("-c").unwrap(),
+            CString::new(shell_command)
+                .map_err(|e| CuboError::SystemError(format!("Invalid command: {}", e)))?,
+        ];
 
         match unsafe { fork() } {
             Ok(ForkResult::Parent { child }) => {

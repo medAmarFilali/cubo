@@ -220,15 +220,54 @@ impl<'a> ImageBuilder<'a> {
             }
         }
 
-        // Execute command using chroot
-        // Note: This requires root privileges
+        let resolv_conf_dest = rootfs.join("etc/resolv.conf");
+        if let Err(e) = fs::copy("/etc/resolv.conf", &resolv_conf_dest) {
+            warn!("Failed to copy /etc/resolv.conf: {} - network may not work", e);
+        }
+
+        let tmp_dir = rootfs.join("tmp");
+        if let Err(e) = fs::create_dir_all(&tmp_dir) {
+            warn!("Failed to create /tmp: {}", e);
+        } else {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&tmp_dir, fs::Permissions::from_mode(0o1777));
+        }
+
+        let dev_dir = rootfs.join("dev");
+        let _ = fs::create_dir_all(&dev_dir);
+
+        let mount_result = Command::new("mount")
+            .args(["--bind", "/dev", dev_dir.to_str().unwrap()])
+            .output();
+
+        let dev_mounted = mount_result.is_ok() && mount_result.as_ref().unwrap().status.success();
+        if !dev_mounted {
+            warn!("Failed to bind mount /dev - some commands may fail");
+        }
+
+        let proc_dir = rootfs.join("proc");
+        let _ = fs::create_dir_all(&proc_dir);
+        let proc_mount_result = Command::new("mount")
+            .args(["-t", "proc", "proc", proc_dir.to_str().unwrap()])
+            .output();
+        let proc_mounted = proc_mount_result.is_ok() && proc_mount_result.as_ref().unwrap().status.success();
+
         let output = Command::new("chroot")
             .arg(rootfs)
             .arg("/bin/sh")
             .arg("-c")
             .arg(command)
             .output()
-            .map_err(|e| CuboError::SystemError(format!("Failed to execute chroot: {}", e)))?;
+            .map_err(|e| CuboError::SystemError(format!("Failed to execute chroot: {}", e)));
+
+        if proc_mounted {
+            let _ = Command::new("umount").arg(&proc_dir).output();
+        }
+        if dev_mounted {
+            let _ = Command::new("umount").arg(&dev_dir).output();
+        }
+
+        let output = output?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
