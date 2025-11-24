@@ -410,9 +410,19 @@ impl ContainerRuntime {
             Err(e) => return Err(CuboError::SystemError(format!("PID1 reaper fork failed: {}", e))),
         }
     }
+    
+    fn resolve_mount_paths(rootfs_path: &Path, volume: &super::VolumeMount) -> (PathBuf, Option<PathBuf>) {
+        let container_path = rootfs_path.join(volume.container_path.trim_start_matches('/'));
+        let host_path = if !volume.host_path.is_empty() {
+            Some(PathBuf::from(&volume.host_path))
+        } else {
+            None
+        };
+        (container_path, host_path)
+    }
 
     fn mount_volume(&self, rootfs_path: &Path, volume: &super::VolumeMount) -> Result<()> {
-        let container_path = rootfs_path.join(volume.container_path.trim_start_matches('/'));
+        let (container_path, host_path) = Self::resolve_mount_paths(rootfs_path, volume);
         
         if let Some(parent) = container_path.parent() {
             fs::create_dir_all(parent)
@@ -420,25 +430,45 @@ impl ContainerRuntime {
         }
         match volume.mount_type {
             super::MountType::Bind => {
-                let host_path = Path::new(&volume.host_path);
-                if !host_path.exists() {
-                    warn!("Host path does not exist: {}", volume.host_path);
-                    return Ok(());
-                }
-
-                if host_path.is_dir() {
-                    fs::create_dir_all(&container_path)
-                        .map_err(|e| CuboError::VolumeError(format!("Failed to create directory: {}", e)))?;
-                } else {
-                    if let Some(parent) = container_path.parent() {
-                        fs::create_dir_all(parent)
-                            .map_err(|e| CuboError::VolumeError(format!("Failed to create parent directory: {}", e)))?;
+                if let Some(host_path) = host_path{
+                    if !host_path.exists() {
+                        warn!("Host path does not exist: {}", volume.host_path);
+                        return Ok(());
                     }
-                    fs::File::create(&container_path)
-                        .map_err(|e| CuboError::VolumeError(format!("Failed to create file: {}", e)))?;
-                }
 
-                debug!("Volume mount handled in namespace setup for: {} -> {}", volume.host_path, volume.container_path);
+                    if host_path.is_dir() {
+                        fs::create_dir_all(&container_path)
+                            .map_err(|e| CuboError::VolumeError(format!("Failed to create directory: {}", e)))?;
+                    } else {
+                        if let Some(parent) = container_path.parent() {
+                            fs::create_dir_all(parent)
+                                .map_err(|e| CuboError::VolumeError(format!("Failed to create parent directory: {}", e)))?;
+                        }
+                        fs::File::create(&container_path)
+                            .map_err(|e| CuboError::VolumeError(format!("Failed to create file: {}", e)))?;
+                    }
+
+                    debug!("Volume mount handled in namespace steup for: {} -> {}", volume.host_path, volume.container_path);
+                }
+                // let host_path = Path::new(&volume.host_path);
+                // if !host_path.exists() {
+                //     warn!("Host path does not exist: {}", volume.host_path);
+                //     return Ok(());
+                // }
+
+                // if host_path.is_dir() {
+                //     fs::create_dir_all(&container_path)
+                //         .map_err(|e| CuboError::VolumeError(format!("Failed to create directory: {}", e)))?;
+                // } else {
+                //     if let Some(parent) = container_path.parent() {
+                //         fs::create_dir_all(parent)
+                //             .map_err(|e| CuboError::VolumeError(format!("Failed to create parent directory: {}", e)))?;
+                //     }
+                //     fs::File::create(&container_path)
+                //         .map_err(|e| CuboError::VolumeError(format!("Failed to create file: {}", e)))?;
+                // }
+
+                // debug!("Volume mount handled in namespace setup for: {} -> {}", volume.host_path, volume.container_path);
             }
             super::MountType::Tmpfs => {
                 fs::create_dir_all(&container_path)
@@ -457,28 +487,34 @@ impl ContainerRuntime {
         Ok(())
     }
 
-    fn setup_user(&self, user_spec: &str) -> Result<()> {
+    fn parse_user_spec(user_spec: &str) -> Result<(u32, Option<u32>)> {
         let parts: Vec<&str> = user_spec.split(':').collect();
-        
-        if parts.len() == 1 {
-            let uid: u32 = parts[0].parse()
-                .map_err(|e| CuboError::SystemError(format!("Invalid UID: {}", e)))?;
-            setuid(Uid::from_raw(uid))
-                .map_err(|e| CuboError::SystemError(format!("Failed to set UID: {}", e)))?;
-        } else if parts.len() == 2 {
-            let uid: u32 = parts[0].parse()
-                .map_err(|e| CuboError::SystemError(format!("Invalid UID: {}", e)))?;
-            let gid: u32 = parts[1].parse()
-                .map_err(|e| CuboError::SystemError(format!("Invalid GID: {}", e)))?;
-            
+
+        match parts.len() {
+            1 => {
+                let uid = parts[0].parse()
+                    .map_err(|e| CuboError::SystemError(format!("Invalid UID: {}", e)))?;
+                Ok((uid, None))
+            }
+            2 => {
+                let uid = parts[0].parse()
+                    .map_err(|e| CuboError::SystemError(format!("Invalid UID: {}", e)))?;
+                let gid = parts[1].parse()
+                    .map_err(|e| CuboError::SystemError(format!("Invalid GID: {}", e)))?;
+                Ok((uid, Some(gid)))
+            }
+            _ => Err(CuboError::SystemError("Invalid user specification".to_string())),
+        }
+    }
+
+    fn setup_user(&self, user_spec: &str) -> Result<()> {
+        let (uid, gid) = Self::parse_user_spec(user_spec)?;
+        if let Some(gid) = gid {
             setgid(Gid::from_raw(gid))
                 .map_err(|e| CuboError::SystemError(format!("Failed to set GID: {}", e)))?;
-            setuid(Uid::from_raw(uid))
-                .map_err(|e| CuboError::SystemError(format!("Failed to set UID: {}", e)))?;
-        } else {
-            return Err(CuboError::SystemError("Invalid user specification".to_string()));
         }
-
+        setuid(Uid::from_raw(uid))
+            .map_err(|e| CuboError::SystemError(format!("Failed to set UID: {}", e)))?;
         Ok(())
     }
 
@@ -1235,5 +1271,109 @@ mod tests {
 
         let result = runtime.setup_user("1000:1000:extra");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_user_spec_uid_only() {
+        let result = ContainerRuntime::parse_user_spec("1000");
+        assert!(result.is_ok());
+        let (uid, gid) = result.unwrap();
+        assert_eq!(uid, 1000);
+        assert_eq!(gid, None);
+    }
+
+    #[test]
+    fn test_parse_user_spec_uid_gid() {
+        let result = ContainerRuntime::parse_user_spec("1000:1001");
+        assert!(result.is_ok());
+        let (uid, gid) = result.unwrap();
+        assert_eq!(uid, 1000);
+        assert_eq!(gid, Some(1001));
+    }
+
+    #[test]
+    fn test_parse_user_spec_invalid_uid() {
+        let result = ContainerRuntime::parse_user_spec("notanumber");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid UID"));
+    }
+
+    #[test]
+    fn test_parse_user_spec_invalid_gid() {
+        let result = ContainerRuntime::parse_user_spec("1000:notanumber");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid GID"));
+    }
+
+    #[test]
+    fn test_parse_user_spec_too_many_parts() {
+        let result = ContainerRuntime::parse_user_spec("1000:1001:extra");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid user specification"));
+    }
+
+    #[test]
+    fn test_parse_user_spec_empty_string() {
+        let result = ContainerRuntime::parse_user_spec("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid UID"));
+    }
+
+    #[test]
+    fn test_resolve_mount_paths_with_host() {
+        let rootfs = PathBuf::from("/var/run/container/rootfs");
+        let volume = VolumeMount {
+            host_path: "/tmp/data".to_string(),
+            container_path: "/data".to_string(),
+            read_only: false,
+            mount_type: MountType::Bind,
+        };
+
+        let (container_path, host_path) = ContainerRuntime::resolve_mount_paths(&rootfs, &volume);
+        assert_eq!(container_path, PathBuf::from("/var/run/container/rootfs/data"));
+        assert_eq!(host_path, Some(PathBuf::from("/tmp/data")));
+    }
+
+    #[test]
+    fn test_resolve_mount_paths_without_host() {
+        let rootfs = PathBuf::from("/var/run/container/rootfs");
+        let volume = VolumeMount {
+            host_path: String::new(),
+            container_path: "/tmp".to_string(),
+            read_only: false,
+            mount_type: MountType::Tmpfs,
+        };
+
+        let (container_path, host_path) = ContainerRuntime::resolve_mount_paths(&rootfs, &volume);
+        assert_eq!(container_path, PathBuf::from("/var/run/container/rootfs/tmp"));
+        assert_eq!(host_path, None);
+    }
+
+    #[test]
+    fn test_resolve_mount_paths_leading_slash() {
+        let rootfs = PathBuf::from("/rootfs");
+        let volume = VolumeMount {
+            host_path: "/host".to_string(),
+            container_path: "/container/path".to_string(),
+            read_only: false,
+            mount_type: MountType::Bind,
+        };
+
+        let (container_path, _) = ContainerRuntime::resolve_mount_paths(&rootfs, &volume);
+        assert_eq!(container_path, PathBuf::from("/rootfs/container/path"));
+    }
+
+    #[test]
+    fn test_resolve_mount_paths_no_leading_slash() {
+        let rootfs = PathBuf::from("/rootfs");
+        let volume = VolumeMount {
+            host_path: "/host".to_string(),
+            container_path: "container/path".to_string(),
+            read_only: false,
+            mount_type: MountType::Bind,
+        };
+
+        let (container_path, _) = ContainerRuntime::resolve_mount_paths(&rootfs, &volume);
+        assert_eq!(container_path, PathBuf::from("/rootfs/container/path"));
     }
 }
