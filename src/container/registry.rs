@@ -441,3 +441,119 @@ impl RegistryClient {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_reference_short() {
+        let ref_str = RegistryClient::parse_reference("alpine")
+            .unwrap()
+            .to_string();
+        assert!(ref_str.contains("docker.io/library/alpine:latest"));
+    }
+
+    #[test]
+    fn test_parse_reference_with_tag() {
+        let ref_str = RegistryClient::parse_reference("alpine:3.18")
+            .unwrap()
+            .to_string();
+        assert!(ref_str.contains("alpine:3.18"));
+    }
+
+    #[test]
+    fn test_parse_reference_user_image() {
+        let ref_str = RegistryClient::parse_reference("user/theimage")
+            .unwrap()
+            .to_string();
+        assert!(ref_str.contains("docker.io/user/theimage:latest"));
+    }
+
+    #[test]
+    fn test_is_gzipped() {
+        let gzip_magic = vec![0x1f, 0x8b, 0x08, 0x00];
+        assert!(RegistryClient::is_gzipped(&gzip_magic));
+
+        let not_gzip = vec![0x00, 0x00, 0x00, 0x00];
+        assert!(!RegistryClient::is_gzipped(&not_gzip));
+    }
+
+    #[test]
+    fn test_is_gzipped_empty_data() {
+        let empty = vec![];
+        assert!(!RegistryClient::is_gzipped(&empty));
+    }
+
+    #[test]
+    fn test_is_gzipped_single_byte() {
+        let single = vec![0x1f];
+        assert!(!RegistryClient::is_gzipped(&single));
+    }
+
+    #[test]
+    fn test_parse_reference_ghcr() {
+        let ref_str = RegistryClient::parse_reference("ghcr.io/owner/repo:v1.0")
+            .unwrap()
+            .to_string();
+        assert!(ref_str.contains("ghcr.io"));
+        assert!(ref_str.contains("owner/repo"));
+        assert!(ref_str.contains("v1.0"));
+    }
+
+    #[test]
+    fn test_parase_reference_gcr() {
+        let ref_str = RegistryClient::parse_reference("gcr.io/project/image:latest")
+            .unwrap()
+            .to_string();
+        assert!(ref_str.contains("gcr.io"));
+    }
+
+    #[test]
+    fn test_parse_reference_quay() {
+        let ref_str = RegistryClient::parse_reference("quay.io/organization/image:1.0")
+            .unwrap()
+            .to_string();
+        assert!(ref_str.contains("quay.io"));
+    }
+
+    #[test]
+    fn test_parse_reference_docker_io_explicit() {
+        let ref_str = RegistryClient::parse_reference("docker.io/library/nginx:1.25")
+            .unwrap()
+            .to_string();
+        assert!(ref_str.contains("nginx"));
+        assert!(ref_str.contains("1.25"));
+    }
+
+    #[test]
+    fn test_registry_client_creation() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let store = crate::container::image_store::ImageStore::new(tmp.path().to_path_buf()).unwrap();
+        let _client = RegistryClient::new(store);
+    }
+    
+    #[test]
+    fn test_image_manifest_serialization() {
+        use crate::container::image_store::{ImageConfig, ImageManifest};
+
+        let manifest = ImageManifest {
+            reference: "test:latest".to_string(),
+            layers: vec!["layer1.tar".to_string(), "layer2.tar".to_string()],
+            config: ImageConfig {
+                cmd: Some(vec!["/bin/bash".to_string()]),
+                env: Some(vec!["PATH=/bin".to_string()]),
+                working_dir: Some("/app".to_string()),
+                exposed_ports: Some(vec!["80/tcp".to_string()]),
+            },
+        };
+
+        let json = serde_json::to_string(&manifest).unwrap();
+        assert!(json.contains("test:latest"));
+        assert!(json.contains("layer1.tar"));
+        let deserialized: ImageManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.reference, "test:latest");
+        assert_eq!(deserialized.layers.len(), 2);
+    }
+}

@@ -213,3 +213,152 @@ pub fn setup_loopback() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_unshare_info_struct() {
+        let info = UnshareInfo {
+            user: true,
+            mnt: true,
+            pid: true,
+            uts: true,
+            net: false,
+        };
+        assert!(info.user);
+        assert!(info.mnt);
+        assert!(info.pid);
+        assert!(info.uts);
+        assert!(!info.net);
+    }
+
+    #[test]
+    fn test_unshare_info_debug() {
+        let info = UnshareInfo {
+            user: true,
+            mnt: false,
+            pid: true,
+            uts: false,
+            net: true,
+        };
+        let debug_str = format!("{:?}", info);
+        assert!(debug_str.contains("UnshareInfo"));
+        assert!(debug_str.contains("user: true"));
+        assert!(debug_str.contains("mnt: false"));
+    }
+
+    #[test]
+    fn test_unshare_info_clone() {
+        let info = UnshareInfo {
+            user: true,
+            mnt: true,
+            pid: false,
+            uts: true,
+            net: false
+        };
+        let cloned = info;
+        assert_eq!(cloned.user, info.user);
+        assert_eq!(cloned.mnt, info.mnt);
+        assert_eq!(cloned.pid, info.pid);
+        assert_eq!(cloned.uts, info.uts);
+        assert_eq!(cloned.net, info.net);
+    }
+
+    #[test]
+    fn test_bind_mount_creates_target_parent_dirs() {
+        let temp = TempDir::new().unwrap();
+        let host_dir = temp.path().join("host_dir");
+        let target = temp.path().join("deep/nested/target");
+        fs::create_dir_all(&host_dir).unwrap();
+        let _result = bind_mount(&host_dir, &target, false);
+        // Parent dirs should be created regardless of mount success/failure
+        assert!(target.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn test_bind_mount_creates_dir_target_for_dir_host() {
+        let temp = TempDir::new().unwrap();
+        let host_dir = temp.path().join("host_dir");
+        let target = temp.path().join("target_dir");
+        fs::create_dir_all(&host_dir).unwrap();
+        let _result = bind_mount(&host_dir, &target, false);
+        assert!(target.exists());
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn test_bind_mount_creates_dir_target_for_file_host() {
+        let temp = TempDir::new().unwrap();
+        let host_file = temp.path().join("host_file");
+        let target = temp.path().join("target_file");
+        fs::write(&host_file, "content").unwrap();
+        let _result = bind_mount(&host_file, &target, false);
+        assert!(target.exists());
+        assert!(target.is_file());
+    }
+
+    #[test]
+    #[ignore]
+    fn test_unshare_user_then_map_ids_as_non_root() {
+        let result = unshare_user_then_map_ids();
+        println!("unshare_user result: {:?}", result);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_unshare_mount_pid_net_bridge_mode() {
+        let result = unshare_mount_pid_net(&NetworkMode::Bridge);
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert!(info.mnt);
+        assert!(info.pid);
+        assert!(info.uts);
+        assert!(info.net);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_unshare_mount_pid_net_host_mode() {
+        let result = unshare_mount_pid_net(&NetworkMode::Host);
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert!(info.mnt);
+        assert!(info.pid);
+        assert!(info.uts);
+        // Host mode doesn't create net namespace
+        assert!(!info.net);
+    }
+
+    #[test]
+    #[ignore] // requires root previleges
+    fn test_make_mounts_private() {
+        let result = make_mounts_private();
+        println!("make_mounts_private result: {:?}", result);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_pivot_to_rootfs() {
+        let temp = TempDir::new().unwrap();
+        let rootfs = temp.path().join("rootfs");
+        fs::create_dir_all(&rootfs).unwrap();
+        let result = pivot_to_rootfs(&rootfs);
+        println!("pivot_to_rootfs result: {:?}", result);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_mount_proc() {
+        let result = mount_proc();
+        println!("mount_proc result: {:?}", result);
+    }
+
+    #[test]
+    fn test_setup_loopback_best_effort() {
+        let result = setup_loopback();
+        assert!(result.is_ok());
+    }
+}

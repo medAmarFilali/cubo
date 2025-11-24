@@ -145,7 +145,7 @@ impl ImageStore {
 
         Ok(manifest)
     } 
-    fn save_manifest(&self, manifest: &ImageManifest) -> Result<()> {
+    pub fn save_manifest(&self, manifest: &ImageManifest) -> Result<()> {
         let safe_name = manifest.reference.replace(":", "_");
         let manifest_path = self.root.join("manifests").join(format!("{}.json", safe_name));
 
@@ -216,5 +216,136 @@ mod tests {
 
         store.save_manifest(&manifest).unwrap();
         assert!(store.has_image("alpine:latest"));
+    }
+
+    #[test]
+    fn test_list_images_empty() {
+        let tmp = TempDir::new().unwrap();
+        let store = ImageStore::new(tmp.path().to_path_buf()).unwrap();
+        let images = store.list_images().unwrap();
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn test_list_images_multiple() {
+        let tmp = TempDir::new().unwrap();
+        let store = ImageStore::new(tmp.path().to_path_buf()).unwrap();
+        for name in &["alpine:latest", "ubuntu:22.04", "nginx:1.25"] {
+            let manifest = ImageManifest {
+            reference: name.to_string(),
+            layers: vec![],
+            config: ImageConfig {
+                cmd: None,
+                env: None,
+                working_dir: None,
+                exposed_ports: None,
+            },
+        };
+        store.save_manifest(&manifest).unwrap();
+        }
+        let images = store.list_images().unwrap();
+        assert_eq!(images.len(), 3);
+        assert!(images.contains(&"alpine:latest".to_string()));
+        assert!(images.contains(&"ubuntu:22.04".to_string()));
+        assert!(images.contains(&"nginx:1.25".to_string()));
+    }
+
+    #[test]
+    fn test_get_layers() {
+        let tmp = TempDir::new().unwrap();
+        let store = ImageStore::new(tmp.path().to_path_buf()).unwrap();
+        let manifest = ImageManifest {
+            reference: "test:layers".to_string(),
+            layers: vec![
+                "/path/to/layer1.tar".to_string(),
+                "/path/to/layer2.tar".to_string(),
+                "/path/to/layer3.tar".to_string(),
+            ],
+            config: ImageConfig {
+                cmd: None,
+                env: None,
+                working_dir: None,
+                exposed_ports: None,
+            },
+        };
+        store.save_manifest(&manifest).unwrap();
+        let layers = store.get_layers("test:layers").unwrap();
+        assert_eq!(layers.len(), 3);
+    }
+
+    #[test]
+    fn test_get_config() {
+        let tmp = TempDir::new().unwrap();
+        let store = ImageStore::new(tmp.path().to_path_buf()).unwrap();
+        let manifest = ImageManifest {
+            reference: "test:config".to_string(),
+            layers: vec![],
+            config: ImageConfig {
+                cmd: Some(vec!["/entrypoint.sh".to_string()]),
+                env: Some(vec!["ENV=prod".to_string(), "DEBUG=false".to_string()]),
+                working_dir: Some("/app".to_string()),
+                exposed_ports: Some(vec!["8080/tcp".to_string()]),
+            },
+        };
+        store.save_manifest(&manifest).unwrap();
+        let config = store.get_config("test:config").unwrap();
+        assert_eq!(config.cmd, Some(vec!["/entrypoint.sh".to_string()]));
+        assert_eq!(config.working_dir, Some("/app".to_string()));
+        assert_eq!(config.env.as_ref().unwrap().len(), 2);
+        assert_eq!(config.exposed_ports.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_import_tar_file_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let store = ImageStore::new(tmp.path().to_path_buf()).unwrap();
+        let result = store.import_tar("test:import", std::path::Path::new("/nonexistent/file.tar"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_image_config_defaults() {
+        let config = ImageConfig {
+            cmd: None,
+            env: None,
+            working_dir: None,
+            exposed_ports: None,
+        };
+        assert!(config.cmd.is_none());
+        assert!(config.env.is_none());
+        assert!(config.working_dir.is_none());
+        assert!(config.exposed_ports.is_none());
+    }
+
+    #[test]
+    fn test_image_manifest_debut() {
+        let manifest = ImageManifest {
+            reference: "debug:test".to_string(),
+            layers: vec!["layer.tar".to_string()],
+            config: ImageConfig {
+                cmd: Some(vec!["test".to_string()]),
+                env: None,
+                working_dir: None,
+                exposed_ports: None,
+            },
+        };
+        let debug_str = format!("{:?}", manifest);
+        assert!(debug_str.contains("ImageManifest"));
+        assert!(debug_str.contains("debug:test"));
+    }
+
+    #[test]
+    fn test_image_config_clone() {
+        let config = ImageConfig {
+            cmd: Some(vec!["/bin/bash".to_string()]),
+            env: Some(vec!["PATH=/bin".to_string()]),
+            working_dir: Some("/".to_string()),
+            exposed_ports: None,
+        };
+        let cloned = config.clone();
+        assert_eq!(cloned.cmd, config.cmd);
+        assert_eq!(cloned.env, config.env);
+        assert_eq!(cloned.working_dir, config.working_dir);
     }
 }

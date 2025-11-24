@@ -433,4 +433,56 @@ mod tests {
         assert!(dest.join("subdir/file2.txt").exists());
         assert_eq!(fs::read_to_string(dest.join("file1.txt")).unwrap(), "content1");
     }
+
+    #[test]
+    fn test_copy_dir_recursive_creates_dest() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("nested/deep/dest");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("test.txt"), "test content").unwrap();
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, tmp.path().to_path_buf());
+        builder.copy_dir_recursive(&src, &dest).unwrap();
+        assert!(dest.exists());
+        assert!(dest.join("test.txt").exists());
+    }
+
+    #[test]
+    fn test_copy_single_file() {
+        let tmp = TempDir::new().unwrap();
+        let src_file = tmp.path().join("source.txt");
+        let dest_file = tmp.path().join("dest/copied.txt");
+        fs::write(&src_file, "file content").unwrap();
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, tmp.path().to_path_buf());
+        fs::create_dir_all(dest_file.parent().unwrap()).unwrap();
+        fs::copy(&src_file, &dest_file).unwrap();
+        assert!(dest_file.exists());
+        assert_eq!(fs::read_to_string(&dest_file).unwrap(), "file content");
+    }
+
+    #[test]
+    fn test_builder_build_context_path() {
+        let tmp = TempDir::new().unwrap();
+        let context = tmp.path().join("my/build/context");
+        fs::create_dir_all(&context).unwrap();
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, context.clone());
+        assert_eq!(builder.build_context, context);
+    }
+
+    #[tokio::test]
+    async fn test_build_missing_base_image() {
+        let tmp = TempDir::new().unwrap();
+        let context = tmp.path().join("context");
+        fs::create_dir_all(&context).unwrap();
+        let cubofile_content = "BASE nonexistent:image\nRUN echo hello";
+        fs::write(context.join("Cubofile"), cubofile_content).unwrap();
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, context);
+        let cubofile = crate::container::cubofile::Cubofile::from_string(cubofile_content).unwrap();
+        let result = builder.build(&cubofile, "test:build").await;
+        assert!(result.is_err());
+    }
 }

@@ -249,4 +249,63 @@ mod tests {
         let content = fs::read_to_string(extracted_file).unwrap();
         assert_eq!(content, "hello from layer");
     }
+
+    #[test]
+    fn test_extract_layer_file_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        fs::create_dir_all(&rootfs).unwrap();
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = RootfsBuilder::new(&image_store);
+        let result = builder.extract_layer(Path::new("/nonexistent/layer.tar"), &rootfs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_build_from_image_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = RootfsBuilder::new(&image_store);
+        let result = builder.build_from_image("nonexistent:image", &rootfs);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_copy_essential_binaries() {
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        fs::create_dir_all(&rootfs).unwrap();
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = RootfsBuilder::new(&image_store);
+        let result = builder.copy_essential_binaries(&rootfs);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_minimal_rootfs_directory_structure() {
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        let image_Store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = RootfsBuilder::new(&image_Store);
+        builder.create_minimal_rootfs(&rootfs).unwrap();
+        let expected_dirs = ["bin", "etc", "lib", "usr", "var", "tmp", "dev", "proc", "sys"];
+        for dir in &expected_dirs {
+            assert!(rootfs.join(dir).exists(), "Directory {} should exist", dir);
+        }
+    }
+
+    #[test]
+    fn test_ensure_essential_dirs_creates_nested() {
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        fs::create_dir_all(&rootfs).unwrap();
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = RootfsBuilder::new(&image_store);
+        builder.ensure_essential_dirs(&rootfs).unwrap();
+        assert!(rootfs.join("var/log").exists());
+        assert!(rootfs.join("var/tmp").exists());
+    }
+
 }

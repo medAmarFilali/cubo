@@ -1,11 +1,8 @@
-mod error;
-mod cli;
-mod commands;
-mod container;
 
 use clap::Parser;
 
-use cli::Cli;
+use cubo::cli::{self, Cli};
+use cubo::commands;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

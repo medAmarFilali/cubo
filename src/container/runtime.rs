@@ -92,7 +92,7 @@ impl ContainerRuntime {
     pub async fn start_container(&self, container_id: &str, detach: bool) -> Result<()> {
         let mut containers = self.containers.lock().await;
         let container = containers.get_mut(container_id)
-            .ok_or_else(|| CuboError::ContainerNotRunning(container_id.to_string()))?;
+            .ok_or_else(|| CuboError::ContainerNotFound(container_id.to_string()))?;
 
         if container.is_running() {
             return Err(CuboError::SystemError("Container is already running".to_string()));
@@ -687,5 +687,177 @@ mod tests {
         std::env::set_var("CUBO_ROOT", tmp.path());
         let cfg = RuntimeConfig::from_env();
         assert_eq!(cfg.root_dir, tmp.path());
+        std::env::remove_var("CUBO_ROOT");
+    }
+
+    #[test]
+    fn test_runtime_config_default() {
+        let cfg = RuntimeConfig::default();
+        assert!(!cfg.debug);
+        assert_eq!(cfg.container_timeout, 300);
+        assert!(matches!(cfg.default_network_mode, NetworkMode::Bridge));
+    }
+
+    #[tokio::test]
+    async fn test_list_containers_only_running() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let container = Container::new(
+            "test:latest".to_string(),
+            vec!["echo".to_string()]
+        );
+        let container2 = Container::new(
+            "alpine:latest".to_string(),
+            vec!["echo".to_string()]
+        );
+        runtime.create_container(container).await.unwrap();
+        runtime.create_container(container2).await.unwrap();
+        let running = runtime.list_containers(false).await.unwrap();
+        assert!(running.is_empty());
+        let all = runtime.list_containers(true).await.unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_container_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let result = runtime.get_container("nonexistent-id").await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), CuboError::ContainerNotRunning(_)));
+    }
+
+    #[tokio::test]
+    async fn test_remove_container_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let result = runtime.remove_container("nonexistent-id", false).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), CuboError::ContainerNotRunning(_)));
+    }
+
+    #[tokio::test]
+    async fn test_start_container_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let result = runtime.start_container("nonexistent-id", false).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), CuboError::ContainerNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_stop_container_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let result = runtime.stop_container("nonexistent-id", None).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), CuboError::ContainerNotRunning(_)));
+    }
+
+    #[tokio::test]
+    async fn test_create_container_with_name() {
+        let temp = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let container = Container::new(
+            "test:latest".to_string(),
+            vec!["echo".to_string()]
+        ).with_name("my-test-container".to_string());
+        let container_id = runtime.create_container(container).await.unwrap();
+        let retrieved = runtime.get_container(&container_id).await.unwrap();
+        assert_eq!(retrieved.name, Some("my-test-container".to_string()))
+    }
+
+    #[tokio::test]
+    async fn test_multiple_containers() {
+        let temp = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let c1 = Container::new("test:v1".to_string(), vec!["echo".to_string(), "1".to_string()]);
+        let c2 = Container::new("test:v2".to_string(), vec!["echo".to_string(), "2".to_string()]);
+        let c3 = Container::new("test:v3".to_string(), vec!["echo".to_string(), "3".to_string()]);
+
+        let id1 = runtime.create_container(c1).await.unwrap();
+        let id2 = runtime.create_container(c2).await.unwrap();
+        let id3 = runtime.create_container(c3).await.unwrap();
+
+        // All should be different
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+        assert_ne!(id1, id3);
+
+        let all = runtime.list_containers(true).await.unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_container_persistence_across_runtime() {
+        let temp = TempDir::new().unwrap();
+        let container_id: String;
+
+        {
+            let config = RuntimeConfig {
+                root_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            };
+            let runtime = ContainerRuntime::new(config).unwrap();
+            let container = Container::new(
+                "persist:test".to_string(),
+                vec!["echo".to_string(), "Hello World!!!".to_string()]
+            ).with_name("persist-test".to_string());
+            container_id = runtime.create_container(container).await.unwrap();
+        }
+
+        {
+            let config = RuntimeConfig {
+                root_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            };
+            let runtime = ContainerRuntime::new(config).unwrap();
+            let containers = runtime.list_containers(true).await.unwrap();
+            assert_eq!(containers.len(), 1);
+            let loaded = runtime.get_container(&container_id).await.unwrap();
+            assert_eq!(loaded.blueprint, "persist:test");
+            assert_eq!(loaded.name, Some("persist-test".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_execution_context_debug() {
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        let ctx = ExecutionContext {
+            container,
+            rootfs_path: PathBuf::from("/tmp/rootfs"),
+            detach: false,
+        };
+        let debug_str = format!("{:?}", ctx);
+        assert!(debug_str.contains("ExecutionContext"));
+        assert!(debug_str.contains("rootfs_path"));
     }
 }

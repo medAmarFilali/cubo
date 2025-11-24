@@ -16,3 +16,29 @@ pub async fn execute(args: BlueprintArgs) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::BlueprintArgs;
+
+    #[tokio::test]
+    async fn test_execute_placeholder() {
+        let args = BlueprintArgs {
+            all: "true".to_string(),
+        };
+
+        let result = execute(args).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_false() {
+        let args = BlueprintArgs {
+            all: "false".to_string(),
+        };
+
+        let result = execute(args).await;
+        assert!(result.is_ok());
+    }
+}
