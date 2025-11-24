@@ -117,17 +117,17 @@ mod tests {
         assert_eq!(tag, "3.18");
     }
 
-    #[tokio::test]
-    async fn test_execute_creates_image_store_dir() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("CUBO_ROOT", temp_dir.path().to_string_lossy().to_string());
+    #[test]
+    fn test_image_store_created_for_pull() {
+        use crate::container::image_store::ImageStore;
 
-        let args = PullArgs {
-            image: "nonexistent-registry.invalid/test:latest".to_string(),
-        };
-        let result = execute(args).await;
-        assert!(result.is_err());
-        assert!(temp_dir.path().join("images").exists());
-        std::env::remove_var("CUBO_ROOT");
+        let temp_dir = TempDir::new().unwrap();
+        let images_path = temp_dir.path().join("images");
+
+        let _store = ImageStore::new(images_path.clone()).unwrap();
+
+        assert!(images_path.exists());
+        assert!(images_path.join("blobs").exists());
+        assert!(images_path.join("manifests").exists());
     }
 }

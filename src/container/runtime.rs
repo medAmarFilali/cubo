@@ -860,4 +860,380 @@ mod tests {
         assert!(debug_str.contains("ExecutionContext"));
         assert!(debug_str.contains("rootfs_path"));
     }
+
+     #[test]
+    fn test_execution_context_with_detach() {
+        let container = Container::new("test:latest".to_string(), vec!["sleep".to_string(), "100".to_string()]);
+        let ctx = ExecutionContext {
+            container,
+            rootfs_path: PathBuf::from("/var/run/container/rootfs"),
+            detach: true,
+        };
+        assert!(ctx.detach);
+        assert_eq!(ctx.rootfs_path, PathBuf::from("/var/run/container/rootfs"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_runtime_config_from_env_empty_value() {
+        std::env::set_var("CUBO_ROOT", "");
+        let cfg = RuntimeConfig::from_env();
+        // Empty value should use default
+        assert!(!cfg.root_dir.as_os_str().is_empty());
+        std::env::remove_var("CUBO_ROOT");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_default_root_dir_home_fallback() {
+        std::env::remove_var("XDG_STATE_HOME");
+        std::env::remove_var("XDG_DATA_HOME");
+        std::env::set_var("HOME", "/home/testuser");
+
+        let dir = default_root_dir();
+        assert_eq!(dir, PathBuf::from("/home/testuser/.local/state/cubo"));
+
+        std::env::remove_var("HOME");
+    }
+
+    #[test]
+    fn test_runtime_config_clone() {
+        let config = RuntimeConfig {
+            root_dir: PathBuf::from("/test/path"),
+            default_network_mode: NetworkMode::Host,
+            debug: true,
+            container_timeout: 600,
+        };
+        let cloned = config.clone();
+        assert_eq!(cloned.root_dir, PathBuf::from("/test/path"));
+        assert!(matches!(cloned.default_network_mode, NetworkMode::Host));
+        assert!(cloned.debug);
+        assert_eq!(cloned.container_timeout, 600);
+    }
+
+    #[test]
+    fn test_runtime_config_debug_trait() {
+        let config = RuntimeConfig::default();
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("RuntimeConfig"));
+        assert!(debug_str.contains("debug"));
+    }
+
+    #[tokio::test]
+    async fn test_container_with_env_vars() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let container = Container::new(
+            "test:latest".to_string(),
+            vec!["printenv".to_string()],
+        )
+        .with_env("FOO".to_string(), "bar".to_string())
+        .with_env("BAZ".to_string(), "qux".to_string());
+
+        let container_id = runtime.create_container(container).await.unwrap();
+        let retrieved = runtime.get_container(&container_id).await.unwrap();
+
+        assert_eq!(retrieved.config.env_vars.get("FOO"), Some(&"bar".to_string()));
+        assert_eq!(retrieved.config.env_vars.get("BAZ"), Some(&"qux".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_container_with_workdir() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let container = Container::new(
+            "test:latest".to_string(),
+            vec!["pwd".to_string()],
+        ).with_workdir("/app".to_string());
+
+        let container_id = runtime.create_container(container).await.unwrap();
+        let retrieved = runtime.get_container(&container_id).await.unwrap();
+
+        assert_eq!(retrieved.config.working_dir, Some("/app".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_container_with_volumes() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let volume = VolumeMount {
+            host_path: "/tmp/data".to_string(),
+            container_path: "/data".to_string(),
+            read_only: false,
+            mount_type: MountType::Bind,
+        };
+        let container = Container::new(
+            "test:latest".to_string(),
+            vec!["ls".to_string()],
+        ).with_volume(volume);
+
+        let container_id = runtime.create_container(container).await.unwrap();
+        let retrieved = runtime.get_container(&container_id).await.unwrap();
+
+        assert_eq!(retrieved.config.volume_mounts.len(), 1);
+        assert_eq!(retrieved.config.volume_mounts[0].container_path, "/data");
+    }
+
+    #[test]
+    fn test_mount_volume_bind_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let rootfs = temp_dir.path().join("rootfs");
+        fs::create_dir_all(&rootfs).unwrap();
+
+        let host_dir = temp_dir.path().join("host");
+        fs::create_dir_all(&host_dir).unwrap();
+
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let volume = VolumeMount {
+            host_path: host_dir.to_string_lossy().to_string(),
+            container_path: "/data".to_string(),
+            read_only: false,
+            mount_type: MountType::Bind,
+        };
+
+        let result = runtime.mount_volume(&rootfs, &volume);
+        assert!(result.is_ok());
+        assert!(rootfs.join("data").exists());
+    }
+
+    #[test]
+    fn test_mount_volume_bind_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let rootfs = temp_dir.path().join("rootfs");
+        fs::create_dir_all(&rootfs).unwrap();
+
+        let host_file = temp_dir.path().join("config.json");
+        fs::write(&host_file, "{}").unwrap();
+
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let volume = VolumeMount {
+            host_path: host_file.to_string_lossy().to_string(),
+            container_path: "/etc/config.json".to_string(),
+            read_only: true,
+            mount_type: MountType::Bind,
+        };
+
+        let result = runtime.mount_volume(&rootfs, &volume);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mount_volume_tmpfs() {
+        let temp_dir = TempDir::new().unwrap();
+        let rootfs = temp_dir.path().join("rootfs");
+        fs::create_dir_all(&rootfs).unwrap();
+
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let volume = VolumeMount {
+            host_path: String::new(),
+            container_path: "/tmp".to_string(),
+            read_only: false,
+            mount_type: MountType::Tmpfs,
+        };
+
+        let result = runtime.mount_volume(&rootfs, &volume);
+        assert!(result.is_ok());
+        assert!(rootfs.join("tmp").exists());
+    }
+
+    #[test]
+    fn test_mount_volume_named_volume() {
+        let temp_dir = TempDir::new().unwrap();
+        let rootfs = temp_dir.path().join("rootfs");
+        fs::create_dir_all(&rootfs).unwrap();
+
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let volume = VolumeMount {
+            host_path: "my-volume".to_string(),
+            container_path: "/data".to_string(),
+            read_only: false,
+            mount_type: MountType::Volume,
+        };
+
+        let result = runtime.mount_volume(&rootfs, &volume);
+        assert!(result.is_ok());
+        assert!(rootfs.join("data").exists());
+    }
+
+    #[test]
+    fn test_mount_volume_nonexistent_host() {
+        let temp_dir = TempDir::new().unwrap();
+        let rootfs = temp_dir.path().join("rootfs");
+        fs::create_dir_all(&rootfs).unwrap();
+
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let volume = VolumeMount {
+            host_path: "/nonexistent/path".to_string(),
+            container_path: "/data".to_string(),
+            read_only: false,
+            mount_type: MountType::Bind,
+        };
+
+        let result = runtime.mount_volume(&rootfs, &volume);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_runtime_clone() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        runtime.create_container(container).await.unwrap();
+
+        let cloned = runtime.clone();
+
+        let original_list = runtime.list_containers(true).await.unwrap();
+        let cloned_list = cloned.list_containers(true).await.unwrap();
+
+        assert_eq!(original_list.len(), cloned_list.len());
+    }
+
+    #[tokio::test]
+    async fn test_stop_container_already_stopped() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        let container_id = runtime.create_container(container).await.unwrap();
+
+        let result = runtime.stop_container(&container_id, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_remove_container_with_force() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        let container_id = runtime.create_container(container).await.unwrap();
+
+        let result = runtime.remove_container(&container_id, true).await;
+        assert!(result.is_ok());
+
+        assert!(runtime.get_container(&container_id).await.is_err());
+    }
+
+    #[test]
+    #[ignore] // Requires specific privileges; run manually with --ignored
+    fn test_setup_user_uid_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        // This test is ignored by default because behavior depends on privileges:
+        // - As root: changing uid will succeed
+        // - As non-root: changing uid will fail
+        let result = runtime.setup_user("1000");
+        let _ = result;
+    }
+
+    #[test]
+    #[ignore]
+    fn test_setup_user_uid_gid() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let result = runtime.setup_user("1000:1000");
+        let _ = result;
+    }
+
+    #[test]
+    fn test_setup_user_invalid_uid() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let result = runtime.setup_user("notanumber");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_setup_user_invalid_gid() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let result = runtime.setup_user("1000:notanumber");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_setup_user_too_many_parts() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let result = runtime.setup_user("1000:1000:extra");
+        assert!(result.is_err());
+    }
 }

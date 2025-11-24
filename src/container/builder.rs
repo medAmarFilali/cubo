@@ -6,7 +6,7 @@ use tracing::{debug, info, warn};
 use crate::error::{CuboError, Result};
 use super::cubofile::{Cubofile, Instruction};
 use super::cubofile_toml::CubofileToml;
-use super::image_store::{ImageStore, ImageManifest};
+use super::image_store::{ImageStore, ImageManifest, ImageConfig};
 use super::rootfs::RootfsBuilder;
 
 pub struct ImageBuilder<'a> {
@@ -484,5 +484,229 @@ mod tests {
         let cubofile = crate::container::cubofile::Cubofile::from_string(cubofile_content).unwrap();
         let result = builder.build(&cubofile, "test:build").await;
         assert!(result.is_err());
+    }
+
+     #[test]
+    fn test_execute_copy_file() {
+        let tmp = TempDir::new().unwrap();
+        let context = tmp.path().join("context");
+        let rootfs = tmp.path().join("rootfs");
+
+        fs::create_dir_all(&context).unwrap();
+        fs::create_dir_all(&rootfs).unwrap();
+        fs::write(context.join("app.txt"), "application data").unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, context);
+
+        let result = builder.execute_copy(&rootfs, "app.txt", "/app/app.txt");
+        assert!(result.is_ok());
+        assert!(rootfs.join("app/app.txt").exists());
+        assert_eq!(fs::read_to_string(rootfs.join("app/app.txt")).unwrap(), "application data");
+    }
+
+    #[test]
+    fn test_execute_copy_directory() {
+        let tmp = TempDir::new().unwrap();
+        let context = tmp.path().join("context");
+        let rootfs = tmp.path().join("rootfs");
+
+        fs::create_dir_all(context.join("src")).unwrap();
+        fs::create_dir_all(&rootfs).unwrap();
+        fs::write(context.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(context.join("src/lib.rs"), "pub fn hello() {}").unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, context);
+
+        let result = builder.execute_copy(&rootfs, "src", "/app/src");
+        assert!(result.is_ok());
+        assert!(rootfs.join("app/src/main.rs").exists());
+        assert!(rootfs.join("app/src/lib.rs").exists());
+    }
+
+    #[test]
+    fn test_execute_copy_nonexistent_source() {
+        let tmp = TempDir::new().unwrap();
+        let context = tmp.path().join("context");
+        let rootfs = tmp.path().join("rootfs");
+
+        fs::create_dir_all(&context).unwrap();
+        fs::create_dir_all(&rootfs).unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, context);
+
+        let result = builder.execute_copy(&rootfs, "nonexistent.txt", "/app/file.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_copy_with_absolute_dest() {
+        let tmp = TempDir::new().unwrap();
+        let context = tmp.path().join("context");
+        let rootfs = tmp.path().join("rootfs");
+
+        fs::create_dir_all(&context).unwrap();
+        fs::create_dir_all(&rootfs).unwrap();
+        fs::write(context.join("config.json"), "{}").unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, context);
+
+        let result = builder.execute_copy(&rootfs, "config.json", "/etc/app/config.json");
+        assert!(result.is_ok());
+        assert!(rootfs.join("etc/app/config.json").exists());
+    }
+
+    #[test]
+    fn test_execute_copy_with_relative_dest() {
+        let tmp = TempDir::new().unwrap();
+        let context = tmp.path().join("context");
+        let rootfs = tmp.path().join("rootfs");
+
+        fs::create_dir_all(&context).unwrap();
+        fs::create_dir_all(&rootfs).unwrap();
+        fs::write(context.join("data.txt"), "some data").unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, context);
+
+        let result = builder.execute_copy(&rootfs, "data.txt", "app/data.txt");
+        assert!(result.is_ok());
+        assert!(rootfs.join("app/data.txt").exists());
+    }
+
+    #[test]
+    fn test_create_layer_tar() {
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        let output = tmp.path().join("layer.tar");
+
+        fs::create_dir_all(&rootfs).unwrap();
+        fs::write(rootfs.join("file.txt"), "content").unwrap();
+        fs::create_dir_all(rootfs.join("subdir")).unwrap();
+        fs::write(rootfs.join("subdir/nested.txt"), "nested content").unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, tmp.path().to_path_buf());
+
+        let result = builder.create_layer_tar(&rootfs, &output);
+        assert!(result.is_ok());
+        assert!(output.exists());
+        // Verify tar file is not empty
+        let metadata = fs::metadata(&output).unwrap();
+        assert!(metadata.len() > 0);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_image_store_root() {
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("CUBO_ROOT", tmp.path());
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, tmp.path().to_path_buf());
+
+        let root = builder.image_store_root();
+        assert_eq!(root, tmp.path().join("images"));
+
+        std::env::remove_var("CUBO_ROOT");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_image_store_root_default() {
+        std::env::remove_var("CUBO_ROOT");
+
+        let tmp = TempDir::new().unwrap();
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, tmp.path().to_path_buf());
+
+        let root = builder.image_store_root();
+        assert_eq!(root, PathBuf::from("/var/lib/cubo/images"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_save_manifest() {
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("CUBO_ROOT", tmp.path());
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, tmp.path().to_path_buf());
+
+        let manifest = ImageManifest {
+            reference: "test:v1".to_string(),
+            layers: vec!["layer1.tar".to_string()],
+            config: ImageConfig {
+                cmd: Some(vec!["/bin/sh".to_string()]),
+                env: None,
+                working_dir: None,
+                exposed_ports: None,
+            },
+        };
+
+        let result = builder.save_manifest(&manifest);
+        assert!(result.is_ok());
+
+        let manifest_path = tmp.path().join("images/manifests/test_v1.json");
+        assert!(manifest_path.exists());
+
+        std::env::remove_var("CUBO_ROOT");
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_empty_dir() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("empty_src");
+        let dest = tmp.path().join("empty_dest");
+
+        fs::create_dir_all(&src).unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, tmp.path().to_path_buf());
+
+        let result = builder.copy_dir_recursive(&src, &dest);
+        assert!(result.is_ok());
+        assert!(dest.exists());
+        assert!(dest.is_dir());
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_deep_nesting() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let deep_path = src.join("a/b/c/d/e");
+        fs::create_dir_all(&deep_path).unwrap();
+        fs::write(deep_path.join("deep.txt"), "deep content").unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, tmp.path().to_path_buf());
+
+        let result = builder.copy_dir_recursive(&src, &dest);
+        assert!(result.is_ok());
+        assert!(dest.join("a/b/c/d/e/deep.txt").exists());
+        assert_eq!(fs::read_to_string(dest.join("a/b/c/d/e/deep.txt")).unwrap(), "deep content");
+    }
+
+    #[tokio::test]
+    async fn test_build_no_base_instruction() {
+        let tmp = TempDir::new().unwrap();
+        let context = tmp.path().join("context");
+        fs::create_dir_all(&context).unwrap();
+
+        let cubofile_content = "RUN echo hello\nCMD /bin/sh";
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = ImageBuilder::new(&image_store, context);
+
+        let cubofile = crate::container::cubofile::Cubofile::from_string(cubofile_content).unwrap();
+        let result = builder.build(&cubofile, "test:build").await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("BASE"));
     }
 }

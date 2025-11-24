@@ -163,4 +163,146 @@ mod tests {
         // Test not found
         assert!(find_container_id(&runtime, "nonexistent").await.is_err());
     }
+
+    #[tokio::test]
+    async fn test_remove_single_container_by_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let container = Container::new(
+            "test:latest".to_string(),
+            vec!["echo".to_string()],
+        );
+
+        let container_id = runtime.create_container(container).await.unwrap();
+
+        // Remove by full ID
+        let result = remove_single_container(&runtime, &container_id, false).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), container_id);
+    }
+
+    #[tokio::test]
+    async fn test_remove_single_container_by_partial_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let container = Container::new(
+            "test:latest".to_string(),
+            vec!["echo".to_string()],
+        );
+
+        let container_id = runtime.create_container(container).await.unwrap();
+        let partial_id = &container_id[..8];
+
+        // Remove by partial ID
+        let result = remove_single_container(&runtime, partial_id, false).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_remove_single_container_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let result = remove_single_container(&runtime, "nonexistent", false).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_remove_single_container_force() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let container = Container::new(
+            "test:latest".to_string(),
+            vec!["echo".to_string()],
+        ).with_name("force-test".to_string());
+
+        let container_id = runtime.create_container(container).await.unwrap();
+        let result = remove_single_container(&runtime, "force-test", true).await;
+        assert!(result.is_ok());
+        assert!(runtime.get_container(&container_id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_find_container_id_multiple_containers() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let c1 = Container::new("test:v1".to_string(), vec!["echo".to_string()])
+            .with_name("container-one".to_string());
+        let c2 = Container::new("test:v2".to_string(), vec!["echo".to_string()])
+            .with_name("container-two".to_string());
+
+        let id1 = runtime.create_container(c1).await.unwrap();
+        let id2 = runtime.create_container(c2).await.unwrap();
+        assert_eq!(
+            find_container_id(&runtime, "container-one").await.unwrap(),
+            id1
+        );
+        assert_eq!(
+            find_container_id(&runtime, "container-two").await.unwrap(),
+            id2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_find_container_id_empty_list() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+        let result = find_container_id(&runtime, "any-id").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_find_container_id_no_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = RuntimeConfig {
+            root_dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let runtime = ContainerRuntime::new(config).unwrap();
+
+        let container = Container::new(
+            "test:latest".to_string(),
+            vec!["echo".to_string()],
+        );
+
+        let container_id = runtime.create_container(container).await.unwrap();
+
+        assert_eq!(
+            find_container_id(&runtime, &container_id).await.unwrap(),
+            container_id
+        );
+
+        let partial = &container_id[..6];
+        assert_eq!(
+            find_container_id(&runtime, partial).await.unwrap(),
+            container_id
+        );
+    }
 }

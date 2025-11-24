@@ -556,4 +556,207 @@ mod tests {
         assert_eq!(deserialized.reference, "test:latest");
         assert_eq!(deserialized.layers.len(), 2);
     }
+
+     #[test]
+    fn test_parse_image_ref_simple() {
+        let (registry, repo, tag) = RegistryClient::parse_image_ref("alpine").unwrap();
+        assert_eq!(registry, "registry-1.docker.io");
+        assert_eq!(repo, "library/alpine");
+        assert_eq!(tag, "latest");
+    }
+
+    #[test]
+    fn test_parse_image_ref_with_tag() {
+        let (registry, repo, tag) = RegistryClient::parse_image_ref("alpine:3.18").unwrap();
+        assert_eq!(registry, "registry-1.docker.io");
+        assert_eq!(repo, "library/alpine");
+        assert_eq!(tag, "3.18");
+    }
+
+    #[test]
+    fn test_parse_image_ref_user_image() {
+        let (registry, repo, tag) = RegistryClient::parse_image_ref("user/myimage:v1").unwrap();
+        assert_eq!(registry, "registry-1.docker.io");
+        assert_eq!(repo, "user/myimage");
+        assert_eq!(tag, "v1");
+    }
+
+    #[test]
+    fn test_parse_image_ref_custom_registry() {
+        let (registry, repo, tag) = RegistryClient::parse_image_ref("ghcr.io/owner/repo:latest").unwrap();
+        assert_eq!(registry, "ghcr.io");
+        assert_eq!(repo, "owner/repo");
+        assert_eq!(tag, "latest");
+    }
+
+    #[test]
+    fn test_parse_image_ref_localhost() {
+        let (registry, repo, tag) = RegistryClient::parse_image_ref("localhost/myimage:test").unwrap();
+        assert_eq!(registry, "localhost");
+        assert_eq!(repo, "myimage");
+        assert_eq!(tag, "test");
+    }
+
+    #[test]
+    fn test_parse_image_ref_no_tag() {
+        let (registry, repo, tag) = RegistryClient::parse_image_ref("nginx").unwrap();
+        assert_eq!(registry, "registry-1.docker.io");
+        assert_eq!(repo, "library/nginx");
+        assert_eq!(tag, "latest");
+    }
+
+    #[test]
+    fn test_convert_oci_config_empty() {
+        let oci_config = OciImageConfig { config: None };
+        let config = RegistryClient::convert_oci_config(&oci_config);
+        assert!(config.cmd.is_none());
+        assert!(config.env.is_none());
+        assert!(config.working_dir.is_none());
+    }
+
+    #[test]
+    fn test_convert_oci_config_full() {
+        let oci_config = OciImageConfig {
+            config: Some(OciConfig {
+                env: Some(vec!["PATH=/bin".to_string(), "HOME=/root".to_string()]),
+                cmd: Some(vec!["/bin/sh".to_string()]),
+                working_dir: Some("/app".to_string()),
+                exposed_ports: None,
+            }),
+        };
+        let config = RegistryClient::convert_oci_config(&oci_config);
+        assert_eq!(config.cmd, Some(vec!["/bin/sh".to_string()]));
+        assert_eq!(config.working_dir, Some("/app".to_string()));
+        assert!(config.env.is_some());
+        assert_eq!(config.env.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_convert_oci_config_with_exposed_ports() {
+        let mut ports_map = serde_json::Map::new();
+        ports_map.insert("80/tcp".to_string(), serde_json::Value::Object(serde_json::Map::new()));
+        ports_map.insert("443/tcp".to_string(), serde_json::Value::Object(serde_json::Map::new()));
+
+        let oci_config = OciImageConfig {
+            config: Some(OciConfig {
+                env: None,
+                cmd: None,
+                working_dir: None,
+                exposed_ports: Some(serde_json::Value::Object(ports_map)),
+            }),
+        };
+        let config = RegistryClient::convert_oci_config(&oci_config);
+        assert!(config.exposed_ports.is_some());
+        assert_eq!(config.exposed_ports.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_parse_image_config_default() {
+        use oci_distribution::client::Config;
+
+        let config_data = Config {
+            data: vec![],
+            media_type: "application/vnd.oci.image.config.v1+json".to_string(),
+            annotations: None,
+        };
+
+        let config = RegistryClient::parse_image_config(&config_data).unwrap();
+        assert_eq!(config.cmd, Some(vec!["/bin/sh".to_string()]));
+        assert!(config.working_dir.is_some());
+    }
+
+    #[test]
+    fn test_is_gzipped_tar_file() {
+        // Tar file magic (not gzipped)
+        let tar_magic = vec![0x75, 0x73, 0x74, 0x61, 0x72];
+        assert!(!RegistryClient::is_gzipped(&tar_magic));
+    }
+
+    #[test]
+    fn test_is_gzipped_exact_two_bytes() {
+        let gzip = vec![0x1f, 0x8b];
+        assert!(RegistryClient::is_gzipped(&gzip));
+
+        let not_gzip = vec![0x1f, 0x00];
+        assert!(!RegistryClient::is_gzipped(&not_gzip));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_image_store_root_from_env() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("CUBO_ROOT", tmp.path());
+
+        let store = crate::container::image_store::ImageStore::new(tmp.path().join("images")).unwrap();
+        let client = RegistryClient::new(store);
+
+        let root = client.image_store_root();
+        assert_eq!(root, tmp.path().join("images"));
+
+        std::env::remove_var("CUBO_ROOT");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_image_store_root_default() {
+        std::env::remove_var("CUBO_ROOT");
+
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let store = crate::container::image_store::ImageStore::new(tmp.path().to_path_buf()).unwrap();
+        let client = RegistryClient::new(store);
+
+        let root = client.image_store_root();
+        assert_eq!(root, PathBuf::from("/var/lib/cubo/images"));
+    }
+
+    #[test]
+    fn test_oci_manifest_deserialization() {
+        let json = r#"{
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+            "config": {
+                "mediaType": "application/vnd.docker.container.image.v1+json",
+                "size": 1234,
+                "digest": "sha256:abc123"
+            },
+            "layers": [
+                {
+                    "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                    "size": 5678,
+                    "digest": "sha256:def456"
+                }
+            ]
+        }"#;
+
+        let manifest: OciManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.schema_version, 2);
+        assert_eq!(manifest.layers.len(), 1);
+        assert_eq!(manifest.config.digest, "sha256:abc123");
+    }
+
+    #[test]
+    fn test_manifest_list_deserialization() {
+        let json = r#"{
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.docker.distribution.manifest.list.v2+json",
+            "manifests": [
+                {
+                    "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+                    "digest": "sha256:abc123",
+                    "size": 1234,
+                    "platform": {
+                        "architecture": "amd64",
+                        "os": "linux"
+                    }
+                }
+            ]
+        }"#;
+
+        let list: ManifestList = serde_json::from_str(json).unwrap();
+        assert_eq!(list.schema_version, 2);
+        assert_eq!(list.manifests.len(), 1);
+        assert_eq!(list.manifests[0].platform.as_ref().unwrap().architecture, "amd64");
+    }
 }

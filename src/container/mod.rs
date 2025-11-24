@@ -215,7 +215,7 @@ impl Container {
         matches!(self.status, ContainerStatus::Running)
     }
 
-    pub fn is_stoppec(&self) -> bool {
+    pub fn is_stopped(&self) -> bool {
         matches!(self.status, ContainerStatus::Stopped | ContainerStatus::Error)
     }
 
@@ -399,6 +399,249 @@ mod tests {
         assert_eq!(port.container_port, 80);
         assert!(matches!(port.protocol, Protocol::Tcp));
         assert_eq!(port.host_ip, Some("127.0.0.1".to_string()));
+    }
+
+    #[test]
+    fn test_container_generate_id() {
+        let id1 = Container::generate_id();
+        let id2 = Container::generate_id();
+        assert_ne!(id1, id2);
+        assert!(!id1.is_empty());
+    }
+
+    #[test]
+    fn test_container_short_id() {
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        let short_id = container.short_id();
+        assert_eq!(short_id.len(), 12);
+        assert!(container.id.starts_with(&short_id));
+    }
+
+    #[test]
+    fn test_container_is_running() {
+        let mut container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        assert!(!container.is_running());
+
+        container.update_status(ContainerStatus::Running);
+        assert!(container.is_running());
+
+        container.update_status(ContainerStatus::Stopped);
+        assert!(!container.is_running());
+    }
+
+    #[test]
+    fn test_container_is_stopped() {
+        let mut container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        assert!(!container.is_stopped());
+
+        container.update_status(ContainerStatus::Stopped);
+        assert!(container.is_stopped());
+
+        container.update_status(ContainerStatus::Error);
+        assert!(container.is_stopped());
+
+        container.update_status(ContainerStatus::Running);
+        assert!(!container.is_stopped());
+    }
+
+    #[test]
+    fn test_container_update_status_sets_timestamps() {
+        let mut container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        assert!(container.started_at.is_none());
+        assert!(container.finished_at.is_none());
+
+        container.update_status(ContainerStatus::Running);
+        assert!(container.started_at.is_some());
+        assert!(container.finished_at.is_none());
+
+        container.update_status(ContainerStatus::Stopped);
+        assert!(container.finished_at.is_some());
+    }
+
+    #[test]
+    fn test_container_set_pid() {
+        let mut container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        assert!(container.pid.is_none());
+
+        container.set_pid(12345);
+        assert_eq!(container.pid, Some(12345));
+    }
+
+    #[test]
+    fn test_container_set_exit_code() {
+        let mut container = Container::new("test:latest".to_string(), vec!["echo".to_string()]);
+        assert!(container.exit_code.is_none());
+
+        container.set_exit_code(0);
+        assert_eq!(container.exit_code, Some(0));
+
+        container.set_exit_code(1);
+        assert_eq!(container.exit_code, Some(1));
+    }
+
+    #[test]
+    fn test_container_with_cpu_limit() {
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()])
+            .with_cpu_limit(2.5);
+        assert_eq!(container.config.cpu_limit, Some(2.5));
+    }
+
+    #[test]
+    fn test_container_with_volume() {
+        let volume = VolumeMount::bind("/host".to_string(), "/container".to_string(), false);
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()])
+            .with_volume(volume);
+        assert_eq!(container.config.volume_mounts.len(), 1);
+    }
+
+    #[test]
+    fn test_container_with_port() {
+        let port = PortMapping::tcp(8080, 80);
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()])
+            .with_port(port);
+        assert_eq!(container.config.ports.len(), 1);
+    }
+
+    #[test]
+    fn test_volume_mount_volume() {
+        let vol = VolumeMount::volume("my-volume".to_string(), "/data".to_string(), true);
+        assert_eq!(vol.host_path, "my-volume");
+        assert_eq!(vol.container_path, "/data");
+        assert!(vol.read_only);
+        assert!(matches!(vol.mount_type, MountType::Volume));
+    }
+
+    #[test]
+    fn test_volume_mount_tmpfs() {
+        let vol = VolumeMount::tmpfs("/tmp".to_string());
+        assert_eq!(vol.host_path, "");
+        assert_eq!(vol.container_path, "/tmp");
+        assert!(!vol.read_only);
+        assert!(matches!(vol.mount_type, MountType::Tmpfs));
+    }
+
+    #[test]
+    fn test_port_mapping_udp() {
+        let port = PortMapping::udp(53, 53);
+        assert_eq!(port.host_port, 53);
+        assert_eq!(port.container_port, 53);
+        assert!(matches!(port.protocol, Protocol::Udp));
+        assert!(port.host_ip.is_none());
+    }
+
+    #[test]
+    fn test_container_status_display() {
+        assert_eq!(ContainerStatus::Created.to_string(), "Created");
+        assert_eq!(ContainerStatus::Running.to_string(), "Running");
+        assert_eq!(ContainerStatus::Stopped.to_string(), "Stopped");
+        assert_eq!(ContainerStatus::Paused.to_string(), "Paused");
+        assert_eq!(ContainerStatus::Error.to_string(), "Error");
+        assert_eq!(ContainerStatus::Restarting.to_string(), "Restarting");
+    }
+
+    #[test]
+    fn test_protocol_display() {
+        assert_eq!(Protocol::Tcp.to_string(), "tcp");
+        assert_eq!(Protocol::Udp.to_string(), "udp");
+    }
+
+    #[test]
+    fn test_container_config_default() {
+        let config = ContainerConfig::default();
+        assert!(config.working_dir.is_none());
+        assert!(config.env_vars.is_empty());
+        assert!(config.volume_mounts.is_empty());
+        assert!(config.ports.is_empty());
+        assert!(config.memory_limit.is_none());
+        assert!(config.cpu_limit.is_none());
+        assert!(config.user.is_none());
+        assert!(config.hostname.is_none());
+        assert!(!config.tty);
+        assert!(!config.stdin);
+        assert!(matches!(config.network_mode, NetworkMode::Bridge));
+        assert!(matches!(config.restart_policy, RestartPolicy::No));
+    }
+
+    #[test]
+    fn test_container_serialization() {
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()])
+            .with_name("test-container".to_string())
+            .with_workdir("/app".to_string())
+            .with_env("FOO".to_string(), "bar".to_string());
+
+        let json = serde_json::to_string(&container).unwrap();
+        assert!(json.contains("test:latest"));
+        assert!(json.contains("test-container"));
+        assert!(json.contains("/app"));
+        assert!(json.contains("FOO"));
+        assert!(json.contains("bar"));
+
+        let deserialized: Container = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.blueprint, "test:latest");
+        assert_eq!(deserialized.name, Some("test-container".to_string()));
+    }
+
+    #[test]
+    fn test_container_status_equality() {
+        assert_eq!(ContainerStatus::Running, ContainerStatus::Running);
+        assert_ne!(ContainerStatus::Running, ContainerStatus::Stopped);
+    }
+
+    #[test]
+    fn test_network_mode_custom() {
+        let mode = NetworkMode::Custom("my-network".to_string());
+        if let NetworkMode::Custom(name) = mode {
+            assert_eq!(name, "my-network");
+        } else {
+            panic!("Expected Custom network mode");
+        }
+    }
+
+    #[test]
+    fn test_restart_policy_on_failure() {
+        let policy = RestartPolicy::OnFailure { max_retries: 5 };
+        if let RestartPolicy::OnFailure { max_retries } = policy {
+            assert_eq!(max_retries, 5);
+        } else {
+            panic!("Expected OnFailure restart policy");
+        }
+    }
+
+    #[test]
+    fn test_container_with_multiple_env_vars() {
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()])
+            .with_env("VAR1".to_string(), "value1".to_string())
+            .with_env("VAR2".to_string(), "value2".to_string())
+            .with_env("VAR3".to_string(), "value3".to_string());
+
+        assert_eq!(container.config.env_vars.len(), 3);
+        assert_eq!(container.config.env_vars.get("VAR1"), Some(&"value1".to_string()));
+        assert_eq!(container.config.env_vars.get("VAR2"), Some(&"value2".to_string()));
+        assert_eq!(container.config.env_vars.get("VAR3"), Some(&"value3".to_string()));
+    }
+
+    #[test]
+    fn test_container_with_multiple_volumes() {
+        let vol1 = VolumeMount::bind("/host1".to_string(), "/container1".to_string(), false);
+        let vol2 = VolumeMount::bind("/host2".to_string(), "/container2".to_string(), true);
+
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()])
+            .with_volume(vol1)
+            .with_volume(vol2);
+
+        assert_eq!(container.config.volume_mounts.len(), 2);
+        assert_eq!(container.config.volume_mounts[0].container_path, "/container1");
+        assert_eq!(container.config.volume_mounts[1].container_path, "/container2");
+    }
+
+    #[test]
+    fn test_container_with_multiple_ports() {
+        let container = Container::new("test:latest".to_string(), vec!["echo".to_string()])
+            .with_port(PortMapping::tcp(8080, 80))
+            .with_port(PortMapping::udp(53, 53))
+            .with_port(PortMapping::tcp(443, 443));
+
+        assert_eq!(container.config.ports.len(), 3);
     }
 }
 

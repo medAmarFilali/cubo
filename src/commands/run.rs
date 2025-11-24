@@ -184,6 +184,36 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_env_var_empty_value() {
+        let result = parse_env_var("EMPTY=");
+        assert_eq!(result, Some(("EMPTY".to_string(), "".to_string())));
+    }
+
+    #[test]
+    fn test_parse_env_var_value_with_equals() {
+        let result = parse_env_var("DATABASE_URL=postgres://user=admin");
+        assert_eq!(result, Some(("DATABASE_URL".to_string(), "postgres://user=admin".to_string())));
+    }
+
+    #[test]
+    fn test_parse_env_var_empty_string() {
+        let result = parse_env_var("");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_env_var_only_equals() {
+        let result = parse_env_var("=");
+        assert_eq!(result, Some(("".to_string(), "".to_string())));
+    }
+
+    #[test]
+    fn test_parse_env_var_complex_value() {
+        let result = parse_env_var("JSON={\"key\":\"value\"}");
+        assert_eq!(result, Some(("JSON".to_string(), "{\"key\":\"value\"}".to_string())));
+    }
+
+    #[test]
     fn test_parse_volume() {
         let volume = parse_volume("/host/path:/container/path").unwrap();
         assert_eq!(volume.host_path, "/host/path");
@@ -197,6 +227,39 @@ mod tests {
         assert!(parse_volume("invalid").is_none());
     }
 
+        #[test]
+    fn test_parse_volume_read_write_explicit() {
+        let volume = parse_volume("/data:/app/data:rw").unwrap();
+        assert_eq!(volume.host_path, "/data");
+        assert_eq!(volume.container_path, "/app/data");
+        assert!(!volume.read_only); // "rw" != "ro", so read_only is false
+    }
+
+    #[test]
+    fn test_parse_volume_single_path() {
+        let result = parse_volume("/single/path");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_volume_too_many_parts() {
+        let result = parse_volume("/a:/b:ro:extra");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_volume_empty_string() {
+        let result = parse_volume("");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_volume_with_spaces_in_path() {
+        let volume = parse_volume("/path with spaces:/container/path").unwrap();
+        assert_eq!(volume.host_path, "/path with spaces");
+        assert_eq!(volume.container_path, "/container/path");
+    }
+
     #[test]
     fn test_parse_port() {
         let port = parse_port("8080:80").unwrap();
@@ -208,6 +271,75 @@ mod tests {
         assert!(matches!(udp_port.protocol, Protocol::Udp));
 
         assert!(parse_port("invalid").is_none());
+    }
+
+    #[test]
+    fn test_parse_port_tcp_explicit() {
+        let port = parse_port("3000:3000/tcp").unwrap();
+        assert_eq!(port.host_port, 3000);
+        assert_eq!(port.container_port, 3000);
+        assert!(matches!(port.protocol, Protocol::Tcp));
+    }
+
+    #[test]
+    fn test_parse_port_invalid_protocol_defaults_tcp() {
+        let port = parse_port("8080:80/xyz").unwrap();
+        assert_eq!(port.host_port, 8080);
+        assert_eq!(port.container_port, 80);
+        assert!(matches!(port.protocol, Protocol::Tcp));
+    }
+
+    #[test]
+    fn test_parse_port_invalid_host_number() {
+        let result = parse_port("abc:80");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_port_invalid_container_number() {
+        let result = parse_port("8080:xyz");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_port_empty_string() {
+        let result = parse_port("");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_port_only_colon() {
+        let result = parse_port(":");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_port_single_number() {
+        let result = parse_port("8080");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_port_uppercase_protocol() {
+        let udp_port = parse_port("53:53/UDP").unwrap();
+        assert!(matches!(udp_port.protocol, Protocol::Udp));
+
+        let tcp_port = parse_port("80:80/TCP").unwrap();
+        assert!(matches!(tcp_port.protocol, Protocol::Tcp));
+    }
+
+    #[test]
+    fn test_parse_port_high_port_numbers() {
+        let port = parse_port("65535:65535").unwrap();
+        assert_eq!(port.host_port, 65535);
+        assert_eq!(port.container_port, 65535);
+    }
+
+    #[test]
+    fn test_parse_port_low_port_numbers() {
+        let port = parse_port("1:1").unwrap();
+        assert_eq!(port.host_port, 1);
+        assert_eq!(port.container_port, 1);
     }
 }
 

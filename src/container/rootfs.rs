@@ -308,4 +308,191 @@ mod tests {
         assert!(rootfs.join("var/tmp").exists());
     }
 
+    #[test]
+    fn test_build_from_image_with_layers() {
+        use crate::container::image_store::{ImageManifest, ImageConfig};
+
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+
+        let layer_path = tmp.path().join("images/blobs/layer.tar");
+        fs::create_dir_all(layer_path.parent().unwrap()).unwrap();
+        create_test_tar(&layer_path, "test content").unwrap();
+
+        let manifest = ImageManifest {
+            reference: "test:latest".to_string(),
+            layers: vec![layer_path.to_string_lossy().to_string()],
+            config: ImageConfig {
+                cmd: Some(vec!["/bin/sh".to_string()]),
+                env: None,
+                working_dir: None,
+                exposed_ports: None,
+            },
+        };
+        image_store.save_manifest(&manifest).unwrap();
+
+        let builder = RootfsBuilder::new(&image_store);
+        let result = builder.build_from_image("test:latest", &rootfs);
+        assert!(result.is_ok());
+
+        assert!(rootfs.join("test.txt").exists());
+        assert!(rootfs.join("dev").exists());
+        assert!(rootfs.join("proc").exists());
+    }
+
+    #[test]
+    fn test_build_from_image_with_empty_layers() {
+        use crate::container::image_store::{ImageManifest, ImageConfig};
+
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+
+        let manifest = ImageManifest {
+            reference: "empty:latest".to_string(),
+            layers: vec![],
+            config: ImageConfig {
+                cmd: None,
+                env: None,
+                working_dir: None,
+                exposed_ports: None,
+            },
+        };
+        image_store.save_manifest(&manifest).unwrap();
+
+        let builder = RootfsBuilder::new(&image_store);
+        let result = builder.build_from_image("empty:latest", &rootfs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no layers"));
+    }
+
+    #[test]
+    fn test_extract_layer_gzip() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("layer.tar");
+        let gz_path = tmp.path().join("layer.tar.gz");
+        let rootfs = tmp.path().join("rootfs");
+
+        fs::create_dir_all(&rootfs).unwrap();
+
+        // Create a test tar file
+        create_test_tar(&tar_path, "gzip test").unwrap();
+
+        // Gzip it
+        let output = Command::new("gzip")
+            .arg("-c")
+            .arg(&tar_path)
+            .output()
+            .unwrap();
+        fs::write(&gz_path, &output.stdout).unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = RootfsBuilder::new(&image_store);
+
+        let result = builder.extract_layer(&gz_path, &rootfs);
+        assert!(result.is_ok());
+
+        let extracted_file = rootfs.join("test.txt");
+        assert!(extracted_file.exists());
+    }
+
+    #[test]
+    fn test_extract_layer_tgz_extension() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("layer.tar");
+        let tgz_path = tmp.path().join("layer.tgz");
+        let rootfs = tmp.path().join("rootfs");
+
+        fs::create_dir_all(&rootfs).unwrap();
+
+        create_test_tar(&tar_path, "tgz test").unwrap();
+
+        let output = Command::new("gzip")
+            .arg("-c")
+            .arg(&tar_path)
+            .output()
+            .unwrap();
+        fs::write(&tgz_path, &output.stdout).unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = RootfsBuilder::new(&image_store);
+
+        let result = builder.extract_layer(&tgz_path, &rootfs);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_build_from_image_multiple_layers() {
+        use crate::container::image_store::{ImageManifest, ImageConfig};
+
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+
+        let layer1_path = tmp.path().join("images/blobs/layer1.tar");
+        let layer2_path = tmp.path().join("images/blobs/layer2.tar");
+        fs::create_dir_all(layer1_path.parent().unwrap()).unwrap();
+
+        create_test_tar(&layer1_path, "layer 1 content").unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("layer2.txt");
+        fs::write(&test_file, "layer 2 content").unwrap();
+        let _ = Command::new("tar")
+            .arg("-cf")
+            .arg(&layer2_path)
+            .arg("-C")
+            .arg(temp_dir.path())
+            .arg("layer2.txt")
+            .output();
+
+        let manifest = ImageManifest {
+            reference: "multi:latest".to_string(),
+            layers: vec![
+                layer1_path.to_string_lossy().to_string(),
+                layer2_path.to_string_lossy().to_string(),
+            ],
+            config: ImageConfig {
+                cmd: Some(vec!["/bin/sh".to_string()]),
+                env: None,
+                working_dir: None,
+                exposed_ports: None,
+            },
+        };
+        image_store.save_manifest(&manifest).unwrap();
+
+        let builder = RootfsBuilder::new(&image_store);
+        let result = builder.build_from_image("multi:latest", &rootfs);
+        assert!(result.is_ok());
+
+        assert!(rootfs.join("test.txt").exists());
+        assert!(rootfs.join("layer2.txt").exists());
+    }
+
+    #[test]
+    fn test_rootfs_builder_new() {
+        let tmp = TempDir::new().unwrap();
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let _builder = RootfsBuilder::new(&image_store);
+    }
+
+    #[test]
+    fn test_ensure_essential_dirs_already_exist() {
+        let tmp = TempDir::new().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+
+        fs::create_dir_all(rootfs.join("dev")).unwrap();
+        fs::create_dir_all(rootfs.join("proc")).unwrap();
+
+        let image_store = ImageStore::new(tmp.path().join("images")).unwrap();
+        let builder = RootfsBuilder::new(&image_store);
+
+        let result = builder.ensure_essential_dirs(&rootfs);
+        assert!(result.is_ok());
+    }
+
 }
