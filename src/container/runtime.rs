@@ -229,6 +229,7 @@ impl ContainerRuntime {
 
     async fn create_isolated_process(&self, exec_ctx: &ExecutionContext) -> Result<i32> {
         let container = &exec_ctx.container;
+        let detach = exec_ctx.detach;
 
         let program = CString::new("/bin/sh")
             .map_err(|e| CuboError::SystemError(format!("Invalid command: {}", e)))?;
@@ -244,20 +245,43 @@ impl ContainerRuntime {
         match unsafe { fork() } {
             Ok(ForkResult::Parent { child }) => {
                 self.set_container_pid(&container.id, child.as_raw() as u32).await;
-                match nix_waitpid(child, None) {
-                    Ok(NixWaitStatus::Exited(_, exit_code)) => Ok(exit_code),
-                    Ok(NixWaitStatus::Signaled(_, signal, _)) => {
-                        warn!("Container {} killed by signal: {:?}", container.id, signal);
-                        Ok(128 + signal as i32)
+
+                if detach {
+                    info!("Container {} detached with PID {}", container.id, child.as_raw());
+                    Ok(0)
+                } else {
+                    match nix_waitpid(child, None) {
+                        Ok(NixWaitStatus::Exited(_, exit_code )) => Ok(exit_code),
+                        Ok(NixWaitStatus::Signaled(_, signal, _)) => {
+                            warn!("Container {} killed by signal: {:?}", container.id, signal);
+                            Ok(128 + signal as i32)
+                        }
+                        Ok(status) => {
+                            warn!("Container {} existed with status: {:?}", container.id, status);
+                            Ok(1)
+                        }
+                        Err(e) => Err(CuboError::SystemError(format!("Failed to wait for child: {}", e))),
                     }
-                    Ok(status) => {
-                        warn!("Container {} exited with status: {:?}", container.id, status);
-                        Ok(1)
-                    }
-                    Err(e) => Err(CuboError::SystemError(format!("Failed to wait for child: {}", e))),
                 }
             }
             Ok(ForkResult::Child) => {
+                if detach {
+                    use std::os::unix::io::AsRawFd;
+                    use std::fs::OpenOptions;
+
+                    if let Ok(devnull) = OpenOptions::new().read(true).open("/dev/null") {
+                        let null_fd = devnull.as_raw_fd();
+                        unsafe {
+                            libc::dup2(null_fd, 0);
+                            libc::dup2(null_fd, 1);
+                            libc::dup2(null_fd, 2);
+                            if null_fd > 2 {
+                                libc::close(null_fd);
+                            }
+
+                        }
+                    }
+                }
                 if let Err(e) = ns::unshare_user_then_map_ids() {
                     error!("userns setup failed: {}", e);
                     std::process::exit(1);

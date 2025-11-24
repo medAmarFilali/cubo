@@ -41,9 +41,9 @@ pub struct RunArgs {
     /// name of the container
     #[arg(short, long)]
     pub name: Option<String>,
-    /// Run in detached mode
+    /// Run in interactive/attached mode (default is detached)
     #[arg(short, long)]
-    pub detach: bool,
+    pub interactive: bool,
     /// Bind mount a volume (host->container)
     #[arg(short,long)]
     pub volume: Vec<String>,
@@ -161,7 +161,7 @@ mod tests {
             assert_eq!(args.blueprint, "alpine");
             assert!(args.command.is_none());
             assert!(args.name.is_none());
-            assert!(!args.detach);
+            assert!(!args.interactive);
         } else {
             panic!("Expected Run command");
         }
@@ -174,7 +174,7 @@ mod tests {
         let cli = Cli::parse_from([
             "cubo", "run", "ubuntu:22.04",
             "--name", "cubo-container",
-            "-d",
+            "-i",
             "-v", "/host:/container",
             "-v", "/tmp:/tmp:ro",
             "-p", "8080:80",
@@ -186,7 +186,7 @@ mod tests {
         if let Commands::Run(args) = cli.command {
             assert_eq!(args.blueprint, "ubuntu:22.04");
             assert_eq!(args.name, Some("cubo-container".to_string()));
-            assert!(args.detach);
+            assert!(args.interactive);
             assert_eq!(args.volume.len(), 2);
             assert_eq!(args.volume[0], "/host:/container");
             assert_eq!(args.volume[1], "/tmp:/tmp:ro");

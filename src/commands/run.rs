@@ -73,9 +73,11 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     info!("Starting container: {}", container_id);
 
-    match runtime.start_container(&container_id, args.detach).await {
+    let detached = !args.interactive;
+
+    match runtime.start_container(&container_id, detached).await {
         Ok(_) => {
-            if args.detach {
+            if detached {
                 println!("{}", container_id);
                 info!("Container started in detached mode");
             } else {
