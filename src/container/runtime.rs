@@ -206,22 +206,28 @@ impl ContainerRuntime {
 
     async fn run_container_process(&self, exec_ctx: ExecutionContext) -> Result<()> {
         let container_id = exec_ctx.container.id.clone();
-        
+        let detach = exec_ctx.detach;
+
         info!("Starting the container process: {}", container_id);
 
         let result = self.create_isolated_process(&exec_ctx).await;
 
-        match result {
-            Ok(exit_code) => {
-                self.set_container_exit_code(&container_id, exit_code).await;
-                self.set_container_status(&container_id, ContainerStatus::Stopped).await;
-                info!("Container {} exited with code: {}", container_id, exit_code);
+        if detach {
+            info!("Container {} running in background", container_id);
+        }else {
+            match result {
+                Ok(exit_code) => {
+                    self.set_container_exit_code(&container_id, exit_code).await;
+                    self.set_container_status(&container_id, ContainerStatus::Stopped).await;
+                    info!("Container {} exited with code: {}", container_id, exit_code);
+                }
+                Err(e) => {
+                    error!("Container {} failed: {}", container_id, e);
+                    self.set_container_status(&container_id, ContainerStatus::Error).await;
+                    return Err(e);
+                }
             }
-            Err(e) => {
-                error!("Container {} failed: {}", container_id, e);
-                self.set_container_status(&container_id, ContainerStatus::Error).await;
-                return Err(e);
-            }
+
         }
 
         Ok(())
@@ -266,11 +272,11 @@ impl ContainerRuntime {
             }
             Ok(ForkResult::Child) => {
                 if detach {
-                    use std::os::unix::io::AsRawFd;
+                    use std::os::unix::io::IntoRawFd;
                     use std::fs::OpenOptions;
 
-                    if let Ok(devnull) = OpenOptions::new().read(true).open("/dev/null") {
-                        let null_fd = devnull.as_raw_fd();
+                    if let Ok(devnull) = OpenOptions::new().read(true).write(true).open("/dev/null") {
+                        let null_fd = devnull.into_raw_fd();
                         unsafe {
                             libc::dup2(null_fd, 0);
                             libc::dup2(null_fd, 1);
@@ -278,7 +284,6 @@ impl ContainerRuntime {
                             if null_fd > 2 {
                                 libc::close(null_fd);
                             }
-
                         }
                     }
                 }
