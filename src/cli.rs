@@ -29,7 +29,9 @@ pub enum Commands {
     // Remove blueprints
     // rmb(RmbArgs),
     /// Pull an image from a registry
-    Pull(PullArgs)
+    Pull(PullArgs),
+    /// Fetch the logs of the container
+    Logs(LogsArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -117,6 +119,24 @@ pub struct RmbArgs {
 pub struct PullArgs {
     /// Image ref (alpine:latest, ubuntu:22.04)
     pub image: String,
+}
+
+#[derive(Debug, Parser)]
+pub struct LogsArgs {
+    /// Container name or ID
+    pub container: String,
+    
+    /// Follow log output (like tail -f)
+    #[arg(short, long)]
+    pub follow: bool,
+
+    /// Number of lines to show from the end of the logs
+    #[arg(short = 'n', long)]
+    pub tail: Option<usize>,
+
+    /// Show timestamps
+    #[arg(short, long)]
+    pub timestamps: bool,
 }
 
 #[cfg(test)]
@@ -348,6 +368,75 @@ mod tests {
             assert_eq!(args.all, "true");
         } else {
             panic!("Expected Blueprint command");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn text_logs_command_basic() {
+        std::env::remove_var("CUBO_ROOT");
+        let cli = Cli::parse_from(["cubo", "logs", "container123"]);
+        if let Commands::Logs(args) = cli.command {
+            assert_eq!(args.container, "container123");
+            assert!(!args.follow);
+            assert!(args.tail.is_none());
+            assert!(!args.timestamps);
+        } else {
+            panic!("Expected logs command");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_logs_command_with_follow() {
+        std::env::remove_var("CUBO_ROOT");
+        let cli = Cli::parse_from(["cubo", "logs", "-f", "container123"]);
+        if let Commands::Logs(args) = cli.command {
+            assert_eq!(args.container, "container123");
+            assert!(args.follow);
+        } else {
+            panic!("Expected logs command");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_logs_command_with_tail() {
+        std::env::remove_var("CUBO_ROOT");
+        let cli = Cli::parse_from(["cubo", "logs", "--tail", "100", "container123"]);
+        if let Commands::Logs(args) = cli.command {
+            assert_eq!(args.container, "container123");
+            assert_eq!(args.tail, Some(100));
+        } else {
+            panic!("Expected logs command");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_logs_command_with_timestamp() {
+        std::env::remove_var("CUBO_ROOT");
+        let cli = Cli::parse_from(["cubo", "logs", "-t", "container123"]);
+        if let Commands::Logs(args) = cli.command {
+            assert_eq!(args.container, "container123");
+            assert!(args.timestamps);
+        } else {
+            panic!("Expected logs command");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_logs_command_with_all_options() {
+        std::env::remove_var("CUBO_ROOT");
+        let cli = Cli::parse_from(["cubo", "logs", "-f", "-t", "--tail", "50", "container123"]);
+        if let Commands::Logs(args) = cli.command {
+            assert_eq!(args.container, "container123");
+            assert!(args.follow);
+            assert!(args.timestamps);
+            assert_eq!(args.tail, Some(50));
+        } else {
+            panic!("Expected logs command");
         }
     }
 }

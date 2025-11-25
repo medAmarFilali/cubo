@@ -275,12 +275,27 @@ impl ContainerRuntime {
                     use std::os::unix::io::IntoRawFd;
                     use std::fs::OpenOptions;
 
-                    if let Ok(devnull) = OpenOptions::new().read(true).write(true).open("/dev/null") {
+                    let log_path = self.root_dir.join(&container.id).join("container.log");
+
+                    if let Ok(log_file) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&log_path)
+                        {
+                            let log_fd = log_file.into_raw_fd();
+                            unsafe {
+                                libc::dup2(log_fd, 1);
+                                libc::dup2(log_fd, 2);
+                                if log_fd > 2 {
+                                    libc::close(log_fd);
+                                }
+                            }
+                        }
+                    
+                    if let Ok(devnull) = OpenOptions::new().read(true).open("/dev/null") {
                         let null_fd = devnull.into_raw_fd();
                         unsafe {
                             libc::dup2(null_fd, 0);
-                            libc::dup2(null_fd, 1);
-                            libc::dup2(null_fd, 2);
                             if null_fd > 2 {
                                 libc::close(null_fd);
                             }

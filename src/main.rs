@@ -24,7 +24,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cli::Commands::Blueprint(args) => commands::blueprints::execute(args).await?,
         cli::Commands::Stop(args) => commands::stop::execute(args).await?,
         cli::Commands::Rm(args) => commands::rm::execute(args).await?,
-        cli::Commands::Pull(args) => commands::pull::execute(args).await?
+        cli::Commands::Pull(args) => commands::pull::execute(args).await?,
+        cli::Commands::Logs(args) => commands::logs::execute(args).await?,
     }
 
     Ok(())

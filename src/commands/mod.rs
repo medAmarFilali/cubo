@@ -6,3 +6,4 @@ pub mod build;
 pub mod blueprints;
 pub mod rmb;
 pub mod pull;
+pub mod logs;
